@@ -38,18 +38,51 @@ async function initCurrencyPage() {
   buildChart();
 }
 
-function buildChart() {
+async function buildChart() {
   const chart = document.querySelector('#usd-chart');
   const details = document.querySelector('#chart-details');
   if (!chart) return;
 
-  const base = 90.4;
-  const values = Array.from({ length: 34 }, (_, index) => {
+  chart.textContent = 'Загрузка истории курса ЦБ...';
+  details.textContent = 'Данные загружаются из архива cbr-xml-daily.ru.';
+
+  const dates = Array.from({ length: 35 }, (_, index) => {
     const date = new Date();
-    date.setDate(date.getDate() - (33 - index));
-    const value = base + Math.sin(index / 3) * 2.4 + index * 0.035;
-    return { date, value: Number(value.toFixed(4)) };
+    date.setDate(date.getDate() - (34 - index));
+    return date;
   });
+
+  const values = [];
+
+  for (const date of dates) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const url = `https://www.cbr-xml-daily.ru/archive/${year}/${month}/${day}/daily_json.js`;
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      const usd = data.Valute && data.Valute.USD;
+      if (!usd) continue;
+
+      values.push({
+        date,
+        value: Number((usd.Value / usd.Nominal).toFixed(4)),
+      });
+    } catch (error) {
+      continue;
+    }
+  }
+
+  chart.textContent = '';
+
+  if (values.length < 30) {
+    details.textContent = 'Не удалось загрузить достаточную историю курса ЦБ за месяц.';
+    return;
+  }
 
   const min = Math.min(...values.map((item) => item.value));
   const max = Math.max(...values.map((item) => item.value));
@@ -66,6 +99,8 @@ function buildChart() {
     });
     chart.appendChild(bar);
   });
+
+  details.textContent = `Загружено ${values.length} значений курса ЦБ за последний месяц. Выберите столбец на диаграмме.`;
 }
 
 document.addEventListener('DOMContentLoaded', initCurrencyPage);
