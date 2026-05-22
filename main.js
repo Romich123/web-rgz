@@ -1,3 +1,16 @@
+async function fetchCbrText(url) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('CBR request failed');
+    return response.text();
+  } catch (error) {
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    const response = await fetch(proxyUrl);
+    if (!response.ok) throw new Error('CBR proxy request failed');
+    return response.text();
+  }
+}
+
 function toggleNews(button) {
   const card = button.closest('.news-card');
   const isOpen = card.classList.toggle('open');
@@ -14,16 +27,16 @@ async function initCurrencyPage() {
   let rate = 0;
 
   try {
-    const response = await fetch('https://www.cbr-xml-daily.ru/daily_json.js');
-    const data = await response.json();
-    const usd = data.Valute.USD;
-    rate = usd.Value / usd.Nominal;
+    const xmlText = await fetchCbrText('https://www.cbr.ru/scripts/XML_daily.asp');
+    const xml = new DOMParser().parseFromString(xmlText, 'application/xml');
+    const usd = [...xml.querySelectorAll('Valute')].find((node) => node.querySelector('CharCode').textContent === 'USD');
+    rate = Number(usd.querySelector('Value').textContent.replace(',', '.')) / Number(usd.querySelector('Nominal').textContent);
     rateNode.textContent = rate.toFixed(4);
-    status.textContent = `Курс ЦБ РФ на ${new Date(data.Date).toLocaleDateString('ru-RU')}`;
+    status.textContent = `Курс Банка России на ${xml.documentElement.getAttribute('Date')}`;
   } catch (error) {
     rate = 90;
     rateNode.textContent = rate.toFixed(4);
-    status.textContent = 'Не удалось загрузить курс, показан резервный пример.';
+    status.textContent = 'Не удалось загрузить курс Банка России, показан резервный пример.';
   }
 
   const fromRub = () => {
@@ -43,44 +56,33 @@ async function buildChart() {
   const details = document.querySelector('#chart-details');
   if (!chart) return;
 
-  chart.textContent = 'Загрузка истории курса ЦБ...';
-  details.textContent = 'Данные загружаются из архива cbr-xml-daily.ru.';
+  chart.textContent = 'Загрузка истории курса Банка России...';
+  details.textContent = 'Данные загружаются с официального XML-интерфейса cbr.ru.';
 
-  const dates = Array.from({ length: 35 }, (_, index) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (34 - index));
-    return date;
-  });
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - 35);
+  const formatDate = (date) => date.toLocaleDateString('ru-RU');
+  const url = `https://www.cbr.ru/scripts/XML_dynamic.asp?date_req1=${formatDate(start)}&date_req2=${formatDate(end)}&VAL_NM_RQ=R01235`;
 
-  const values = [];
+  let values = [];
 
-  for (const date of dates) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const url = `https://www.cbr-xml-daily.ru/archive/${year}/${month}/${day}/daily_json.js`;
+  try {
+    const xmlText = await fetchCbrText(url);
+    const xml = new DOMParser().parseFromString(xmlText, 'application/xml');
 
-    try {
-      const response = await fetch(url);
-      if (!response.ok) continue;
-
-      const data = await response.json();
-      const usd = data.Valute && data.Valute.USD;
-      if (!usd) continue;
-
-      values.push({
-        date,
-        value: Number((usd.Value / usd.Nominal).toFixed(4)),
-      });
-    } catch (error) {
-      continue;
-    }
+    values = [...xml.querySelectorAll('Record')].map((record) => ({
+      date: record.getAttribute('Date'),
+      value: Number(record.querySelector('Value').textContent.replace(',', '.')) / Number(record.querySelector('Nominal').textContent),
+    }));
+  } catch (error) {
+    values = [];
   }
 
   chart.textContent = '';
 
-  if (values.length < 30) {
-    details.textContent = 'Не удалось загрузить достаточную историю курса ЦБ за месяц.';
+  if (!values.length) {
+    details.textContent = 'Не удалось загрузить историю курса Банка России.';
     return;
   }
 
@@ -91,16 +93,16 @@ async function buildChart() {
     const bar = document.createElement('button');
     bar.className = 'bar';
     bar.style.height = `${80 + ((item.value - min) / (max - min)) * 180}px`;
-    bar.title = `${item.date.toLocaleDateString('ru-RU')}: ${item.value}`;
+    bar.title = `${item.date}: ${item.value.toFixed(4)}`;
     bar.addEventListener('click', () => {
       document.querySelectorAll('.bar').forEach((node) => node.classList.remove('active'));
       bar.classList.add('active');
-      details.textContent = `${item.date.toLocaleDateString('ru-RU')}: ${item.value} руб. за 1 USD`;
+      details.textContent = `${item.date}: ${item.value.toFixed(4)} руб. за 1 USD`;
     });
     chart.appendChild(bar);
   });
 
-  details.textContent = `Загружено ${values.length} значений курса ЦБ за последний месяц. Выберите столбец на диаграмме.`;
+  details.textContent = `Загружено ${values.length} значений курса Банка России за период не менее месяца. Выберите столбец на диаграмме.`;
 }
 
 document.addEventListener('DOMContentLoaded', initCurrencyPage);
